@@ -4,10 +4,11 @@ import os
 from datetime import datetime
 import requests
 from urllib.parse import urlparse
-from flask import Flask, request
-from flask_apscheduler import APScheduler
+# from flask import Flask, request
+# from flask_apscheduler import APScheduler
 from slack_bolt import App, BoltResponse
-from slack_bolt.adapter.flask import SlackRequestHandler
+# from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_bolt.error import BoltUnhandledRequestError
 import concurrent.futures
 from app.daily_hot_news import build_all_news_block
@@ -16,56 +17,60 @@ from app.rate_limiter import RateLimiter
 from app.user import get_user, is_premium_user, is_active_user, update_message_token_usage
 from app.util import md5
 
+from dotenv import load_dotenv
+load_dotenv()
+
 class Config:
     SCHEDULER_API_ENABLED = True
 
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
-schedule_channel = "#daily-news"
+# schedule_channel = "#daily-news"
 
-app = Flask(__name__)
+# app = Flask(__name__)
 
-slack_app = App(
-    token=os.environ.get("SLACK_TOKEN"),
-    signing_secret=os.environ.get("SLACK_SIGNING_SECRET"),
-    raise_error_for_unhandled_request=True
-)
-slack_handler = SlackRequestHandler(slack_app)
+slack_app = App(token=os.environ["SLACK_BOT_TOKEN"])
+# slack_app = App(
+#     token=os.environ.get("SLACK_TOKEN"),
+#     signing_secret=os.environ.get("SLACK_SIGNING_SECRET"),
+#     raise_error_for_unhandled_request=True
+# )
 
 @slack_app.error
 def handle_errors(error):
+    print("CONG TEST error")
     if isinstance(error, BoltUnhandledRequestError):
         return BoltResponse(status=200, body="")
     else:
         return BoltResponse(status=500, body="Something Wrong")
 
-scheduler = APScheduler()
-scheduler.api_enabled = True
-scheduler.init_app(app)
+# scheduler = APScheduler()
+# scheduler.api_enabled = True
+# scheduler.init_app(app)
 
-def send_daily_news(client, news):
-    for news_item in news:
-        try:
-            r = client.chat_postMessage(
-                channel=schedule_channel,
-                text="🔥🔥🔥 Daily Hot News 🔥🔥🔥",
-                blocks=news_item,
-                reply_broadcast=True,
-                unfurl_links=False,
-            )
-            logging.info(r)
-        except Exception as e:
-            logging.error(e)
+# def send_daily_news(client, news):
+#     for news_item in news:
+#         try:
+#             r = client.chat_postMessage(
+#                 channel=schedule_channel,
+#                 text="🔥🔥🔥 Daily Hot News 🔥🔥🔥",
+#                 blocks=news_item,
+#                 reply_broadcast=True,
+#                 unfurl_links=False,
+#             )
+#             logging.info(r)
+#         except Exception as e:
+#             logging.error(e)
 
-@scheduler.task('cron', id='daily_news_task', hour=1, minute=30)
-def schedule_news():
-    logging.info("=====> Start to send daily news!")
-    all_news_blocks = build_all_news_block()
-    send_daily_news(slack_app.client, all_news_blocks)
+# @scheduler.task('cron', id='daily_news_task', hour=1, minute=30)
+# def schedule_news():
+#     logging.info("=====> Start to send daily news!")
+#     all_news_blocks = build_all_news_block()
+#     send_daily_news(slack_app.client, all_news_blocks)
 
-@app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return slack_handler.handle(request)
+# @app.route("/slack/events", methods=["POST"])
+# def slack_events():
+#     return slack_handler.handle(request)
 
 def insert_space(text):
 
@@ -248,19 +253,20 @@ def bot_process(event, say, logger):
 
 @slack_app.event("app_mention")
 def handle_mentions(event, say, logger):
+    # print("CONG TEST app_mention")
     logger.info(event)
 
-    user = event["user"]
-    thread_ts = event["ts"]
+    # user = event["user"]
+    # thread_ts = event["ts"]
 
-    if not is_active_user(user):
-        say(f'<@{user}>, 你的账户未激活，请微信联系 `improve365_cn` 管理员激活你的账户后再试用。', thread_ts=thread_ts)
-        return
+    # if not is_active_user(user):
+    #     say(f'<@{user}>, 你的账户未激活，请微信联系 `improve365_cn` 管理员激活你的账户后再试用。', thread_ts=thread_ts)
+    #     return
 
-    if not limiter.allow_request(user):
-        if not is_premium_user(user):
-            say(f'<@{user}>, 免费用户试用额度为 {limiter_message_per_user} 条对话每 {limiter_time_period / 3600} 小时, 你已超出该限制，请等待后再试。如欲购买请微信联系 `improve365_cn` 管理员。', thread_ts=thread_ts)
-            return
+    # if not limiter.allow_request(user):
+    #     if not is_premium_user(user):
+    #         say(f'<@{user}>, 免费用户试用额度为 {limiter_message_per_user} 条对话每 {limiter_time_period / 3600} 小时, 你已超出该限制，请等待后再试。如欲购买请微信联系 `improve365_cn` 管理员。', thread_ts=thread_ts)
+    #         return
     
     bot_process(event, say, logger)
     
@@ -536,7 +542,12 @@ def update_home_tab(client, event, logger):
     except Exception as e:
         logger.error(f"Error publishing home tab: {e}")
 
-scheduler.start()
+# scheduler.start()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+
+    slack_bot_token = os.environ['SLACK_BOT_TOKEN']
+    assert slack_bot_token.startswith('xoxb')
+    print("CONG TEST slack_token", slack_bot_token)
+
+    SocketModeHandler(slack_app, os.environ["SLACK_APP_TOKEN"]).start()

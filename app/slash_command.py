@@ -74,6 +74,7 @@ def handle_command_gpt_as_novelist(ack, say, command):
 
 def handle_command_gpt_as_terminal(ack, say, command):
     ack()
+    print("CONG TEST command")
     channel_id = command["channel_id"]
     user_id = command["user_id"]
     blocks = build_prompt_blocks(get_command_name(command))

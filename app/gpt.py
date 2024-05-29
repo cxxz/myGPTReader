@@ -21,9 +21,9 @@ SPEECH_KEY = os.environ.get('SPEECH_KEY')
 SPEECH_REGION = os.environ.get('SPEECH_REGION')
 openai.api_key = OPENAI_API_KEY
 
-index_cache_web_dir = Path('/tmp/myGPTReader/cache_web/')
-index_cache_file_dir = Path('/data/myGPTReader/file/')
-index_cache_voice_dir = Path('/tmp/myGPTReader/voice/')
+index_cache_web_dir = Path('./content_data/cache_web/')
+index_cache_file_dir = Path('./content_data/file/')
+index_cache_voice_dir = Path('./content_data/voice/')
 
 if not index_cache_web_dir.is_dir():
     index_cache_web_dir.mkdir(parents=True, exist_ok=True)
@@ -200,7 +200,7 @@ def get_voice_file_from_text(text, voice_name=None):
     speech_config = SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
     speech_config.set_speech_synthesis_output_format(
         SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3)
-    speech_config.speech_synthesis_language = "zh-CN"
+    speech_config.speech_synthesis_language = "en"
     file_name = f"{index_cache_voice_dir}{uuid.uuid4()}.mp3"
     file_config = AudioOutputConfig(filename=file_name)
     synthesizer = SpeechSynthesizer(

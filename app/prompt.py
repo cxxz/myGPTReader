@@ -17,7 +17,7 @@ QUESTION_ANSWER_PROMPT_TMPL_EN = (
     "My question is {query_str}\n"
 )
 
-def get_prompt_template(language='zh'):
+def get_prompt_template(language='en'):
     if language == 'en':
         logging.info('=====> Use English prompt template!')
         return QuestionAnswerPrompt(QUESTION_ANSWER_PROMPT_TMPL_EN)
