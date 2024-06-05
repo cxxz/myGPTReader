@@ -1,5 +1,5 @@
 import logging
-from llama_index.prompts.prompts import QuestionAnswerPrompt
+from llama_index.core.prompts.prompts import QuestionAnswerPrompt
 
 QUESTION_ANSWER_PROMPT_TMPL_CN = (
     "上下文信息如下所示： \n"

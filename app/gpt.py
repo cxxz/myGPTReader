@@ -5,9 +5,12 @@ import hashlib
 import random
 import uuid
 import openai
+from openai import OpenAI
 from pathlib import Path
-from llama_index import ServiceContext, GPTVectorStoreIndex, LLMPredictor, RssReader, SimpleDirectoryReader, StorageContext, load_index_from_storage
-from llama_index.readers.schema.base import Document
+from llama_index.core import ServiceContext, GPTVectorStoreIndex, SimpleDirectoryReader, StorageContext, load_index_from_storage, Document
+from llama_index.legacy.llm_predictor.base import LLMPredictor
+from llama_index.readers.web import RssReader
+# from llama_index.readers.schema.base import Document
 from langchain.chat_models import ChatOpenAI
 from azure.cognitiveservices.speech import SpeechConfig, SpeechSynthesizer, ResultReason, CancellationReason, SpeechSynthesisOutputFormat
 from azure.cognitiveservices.speech.audio import AudioOutputConfig
@@ -33,6 +36,8 @@ if not index_cache_voice_dir.is_dir():
 
 if not index_cache_file_dir.is_dir():
     index_cache_file_dir.mkdir(parents=True, exist_ok=True)
+
+client = OpenAI()
 
 llm_predictor = LLMPredictor(llm=ChatOpenAI(
     temperature=0, model_name="gpt-3.5-turbo"))
@@ -108,7 +113,7 @@ def get_answer_from_chatGPT(messages):
     dialog_messages = format_dialog_messages(messages)
     logging.info('=====> Use chatGPT to answer!')
     logging.info(dialog_messages)
-    completion = openai.ChatCompletion.create(
+    completion = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": dialog_messages}]
     )
