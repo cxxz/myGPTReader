@@ -12,13 +12,16 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_bolt.error import BoltUnhandledRequestError
 import concurrent.futures
 from app.daily_hot_news import build_all_news_block
-from app.gpt import get_answer_from_chatGPT, get_answer_from_llama_file, get_answer_from_llama_web, get_text_from_whisper, get_voice_file_from_text, index_cache_file_dir
+from app.gpt import get_answer_from_chatGPT, get_answer_from_llama_file, get_docs_from_web, get_text_from_whisper, get_voice_file_from_text, index_cache_file_dir
+from llama_index.core import Document
 from app.rate_limiter import RateLimiter
 from app.user import get_user, is_premium_user, is_active_user, update_message_token_usage
 from app.util import md5
 
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Config:
     SCHEDULER_API_ENABLED = True
@@ -230,19 +233,28 @@ def bot_process(event, say, logger):
     if file is not None:
         future = executor.submit(get_answer_from_llama_file, dialog_context_keep_latest(thread_message_history[parent_thread_ts]['dialog_texts']), file)
     elif len(urls) > 0:
-        future = executor.submit(get_answer_from_llama_web, thread_message_history[parent_thread_ts]['dialog_texts'], list(urls))
+        future = executor.submit(get_docs_from_web, thread_message_history[parent_thread_ts]['dialog_texts'], list(urls))
     else:
         future = executor.submit(get_answer_from_chatGPT, thread_message_history[parent_thread_ts]['dialog_texts'])
 
     try:
-        gpt_response, total_llm_model_tokens, total_embedding_model_tokens = future.result(timeout=300)
-        update_token_usage(event, total_llm_model_tokens, total_embedding_model_tokens)
-        update_thread_history(parent_thread_ts, 'chatGPT: %s' % insert_space(f'{gpt_response}'))
-        logger.info(gpt_response)
+        response, total_llm_model_tokens, total_embedding_model_tokens = future.result(timeout=300)
+        if isinstance(response, dict):
+            logger.info(response)
+            file_count = 0
+            for url, doc in response.items():
+                if os.path.exists(doc):
+                    slack_app.client.files_upload_v2(file=doc, channel=channel, thread_ts=parent_thread_ts)
+                    file_count += 1
+                else:
+                    say(f'<@{user}>, missing file {doc} for {url}', thread_ts=thread_ts)
+            response = f'Response written to {file_count} files'
+        update_thread_history(parent_thread_ts, 'chatGPT: %s' % insert_space(f'{response}'))
+        logger.info(response)
         if voicemessage is None:
-            say(f'<@{user}>, {gpt_response}', thread_ts=thread_ts)
+            say(f'<@{user}>, {response}', thread_ts=thread_ts)
         else:
-            voice_file_path = get_voice_file_from_text(str(gpt_response))
+            voice_file_path = get_voice_file_from_text(str(response))
             logger.info(f'=====> Voice file path is {voice_file_path}')
             slack_app.client.files_upload_v2(file=voice_file_path, channel=channel, thread_ts=parent_thread_ts)
     except concurrent.futures.TimeoutError:
@@ -548,6 +560,6 @@ if __name__ == '__main__':
 
     slack_bot_token = os.environ['SLACK_BOT_TOKEN']
     assert slack_bot_token.startswith('xoxb')
-    print("CONG TEST slack_token", slack_bot_token)
+    # print("CONG TEST slack_token", slack_bot_token)
 
     SocketModeHandler(slack_app, os.environ["SLACK_APP_TOKEN"]).start()

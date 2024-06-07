@@ -7,6 +7,7 @@ import feedparser
 import validators
 import fnmatch
 from youtube_transcript_api import YouTubeTranscriptApi
+import yt_dlp
 
 CF_ACCESS_CLIENT_ID = os.environ.get('CF_ACCESS_CLIENT_ID')
 CF_ACCESS_CLIENT_SECRET = os.environ.get('CF_ACCESS_CLIENT_SECRET')
@@ -97,3 +98,20 @@ def get_youtube_transcript(video_id: str) -> str:
     except Exception as e:
         logging.warning(f"Error: {e} - {video_id}")
     return None
+
+def download_audio_from_youtube(url, filename):
+    output_path = os.path.splitext(filename)[0]
+    format = os.path.splitext(filename)[-1].replace(".", "")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': output_path,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': format,
+        }],
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    return filename
