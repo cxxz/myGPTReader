@@ -1,6 +1,9 @@
 
 import os
 import logging
+import tarfile
+import re
+import requests
 import hashlib
 import random
 import uuid
@@ -15,9 +18,9 @@ from langchain.chat_models import ChatOpenAI
 from azure.cognitiveservices.speech import SpeechConfig, SpeechSynthesizer, ResultReason, CancellationReason, SpeechSynthesisOutputFormat
 from azure.cognitiveservices.speech.audio import AudioOutputConfig
 
-from app.fetch_web_post import get_urls, get_youtube_transcript, scrape_website, scrape_website_by_phantomjscloud, download_audio_from_youtube
+from app.fetch_web_post import get_urls, get_youtube_transcript, get_webpage_md_by_jina, scrape_website_by_phantomjscloud, download_audio_from_youtube
 from app.prompt import get_prompt_template
-from app.util import get_language_code, get_youtube_video_id
+from app.util import get_language_code, get_youtube_video_id, get_arxiv_id
 
 import whisperx
 from whisperx.utils import get_writer
@@ -37,8 +40,9 @@ openai.api_key = OPENAI_API_KEY
 
 index_cache_web_dir = Path(os.path.expanduser('~/workspace/content_data/cache_web/'))
 index_cache_file_dir = Path(os.path.expanduser('~/workspace/content_data/file/'))
+tex_cache_file_dir = Path(os.path.expanduser('~/workspace/content_data/tex/'))
 index_cache_voice_dir = Path(os.path.expanduser('~/workspace/content_data/voice/'))
-transcribed_cache_file_dir = Path(os.path.expanduser('~/workspace/content_data/transcribed/'))
+transcribed_cache_file_dir = Path(os.path.expanduser('~/workspace/content_data/file/'))
 
 if not index_cache_web_dir.is_dir():
     index_cache_web_dir.mkdir(parents=True, exist_ok=True)
@@ -48,6 +52,9 @@ if not index_cache_voice_dir.is_dir():
 
 if not index_cache_file_dir.is_dir():
     index_cache_file_dir.mkdir(parents=True, exist_ok=True)
+
+if not tex_cache_file_dir.is_dir():
+    tex_cache_file_dir.mkdir(parents=True, exist_ok=True)
 
 if not transcribed_cache_file_dir.is_dir():
     transcribed_cache_file_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +143,13 @@ def get_file_from_url(url, prefix = "page", format = ".txt"):
     if prefix == "youtube":
         video_id = get_youtube_video_id(url)
         md5_url = video_id
+    elif prefix == "arxiv":
+        arxiv_id = get_arxiv_id(url)
+        md5_url = arxiv_id
+        format = ".tex"
+    elif prefix == "page":
+        format = ".md"
+        md5_url = hashlib.md5(url.encode()).hexdigest()
     else:
         md5_url = hashlib.md5(url.encode()).hexdigest()
     file_name = f"{index_cache_file_dir}/{prefix}_{md5_url}{format}"
@@ -156,7 +170,12 @@ def get_documents_from_urls(urls, format = ".txt"):
     if len(urls['page_urls']) > 0:
         for url in urls['page_urls']:
             file_exist, file_name = get_file_from_url(url, "page", format)
-            docs[url] = file_name if file_exist else write_url_doc(scrape_website(url), file_name)
+            docs[url] = file_name if file_exist else write_url_doc(get_webpage_md_by_jina(url), file_name)
+    if len(urls['arxiv_urls']) > 0:
+        for url in urls['arxiv_urls']:
+            file_exist, file_name = get_file_from_url(url, "arxiv", format)
+            axiv_id = get_arxiv_id(url)
+            docs[url] = file_name if file_exist else write_url_doc(get_arxiv_tex(axiv_id), file_name)
     if len(urls['rss_urls']) > 0:
         rss_documents = RssReader().load_data(urls['rss_urls'])
         for i, url in enumerate(urls['rss_urls']):
@@ -348,3 +367,102 @@ def get_voice_file_from_text(text, voice_name=None):
             logging.error("Error details: {}".format(
                 cancellation_details.error_details))
     return file_name
+
+def clean_tex(text):
+    # remove all comments from the tex file
+    # remove any line that starts with %
+    text = '\n'.join(line for line in text.split('\n') if not line.strip().startswith("%"))
+    # remove any text between \begin{comment} and \end{comment}
+    while "\\begin{comment}" in text:
+        start = text.index("\\begin{comment}")
+        end = text.index("\\end{comment}") + len("\\end{comment}")
+        text = text[:start] + text[end:]
+    return text
+
+def get_arxiv_tex(arxiv_id):
+    logging.info(f"Retrieving Latex source file for arxiv id: {arxiv_id}")
+
+    url = f"https://arxiv.org/src/{arxiv_id}"
+    tex_folder = tex_cache_file_dir / arxiv_id
+
+    if os.path.exists(tex_folder):
+        logging.info(f"Tex folder already exists: {tex_folder}")
+    else:
+        response = requests.get(url, verify=False)  # Setting verify=False skips SSL certificate verification
+
+        # Open a file with the desired name in binary write mode
+        with open(f'tmp.tar.gz', 'wb') as file:
+            file.write(response.content)  # Write the content of the response to the file
+
+        # untar tmp.tar.gz to a folder named <arxiv_id>
+        with tarfile.open("tmp.tar.gz", "r:gz") as tar:
+            tar.extractall(tex_folder)
+
+    # list all .tex file in tex_folder recursively
+    tex_files = []
+    for root, dirs, files in os.walk(tex_folder):
+        for file in files:
+            if file.endswith(".tex"):
+                tex_files.append(os.path.join(root, file))
+    # print(tex_files)
+
+    # create a dict of tex_files and their content
+    tex_content = {}
+    for file in tex_files:
+        with open(file, 'r') as f:
+            tex_content[file] = clean_tex(f.read())
+    # print(tex_content)
+
+    # iterate over tex_content and find the file that contains the abstract
+    main_tex = None
+    for file, content in tex_content.items():
+        if "begin{abstract}" in content and "begin{document}" in content:
+            print(f"Found main tex: {file}")
+            main_tex = file
+            break
+
+    if not main_tex:
+        logging.info(f"Cannot find main tex file in {tex_folder}")
+        return None
+    
+    main_content = tex_content[main_tex]
+    # identity the location of first "\title" in main_content
+    title_start = main_content.find("\\title")
+    doc_start = main_content.find("\\begin{document}")
+    if title_start == -1:
+        title_start = doc_start
+    main_end = main_content.find("\\end{document}") + len("\\end{document}")
+
+    main_start = min(title_start, doc_start)
+    main_content = main_content[main_start:main_end]
+
+    def replace_input_sections_inline(content):
+        lines_to_replace = False
+        lines = [line for line in content.split('\n')]
+        for i, line in enumerate(lines):
+            if not line.strip():
+                line = ""
+            if line.startswith("\\input{"):
+                lines_to_replace = True
+                # get the tex_file in input{tex_file}
+                tex_file = line.split("{")[1].split("}")[0]
+                if not tex_file.endswith(".tex"):
+                    tex_file += ".tex"
+                tex_path = os.path.join("/".join(main_tex.split("/")[:-1]), tex_file)
+                print(tex_path)
+                if tex_path not in tex_content:
+                    raise Exception(f"File {tex_path} not found in tex_content")
+                else:
+                    lines[i] = tex_content[tex_path]
+                    # print(line)
+
+        return lines_to_replace, '\n'.join(lines)
+    
+    has_input_lines, main_content = replace_input_sections_inline(main_content)
+    while has_input_lines:
+        has_input_lines, main_content = replace_input_sections_inline(main_content)
+
+    main_content = re.sub(r'\n\n\s*\n', '\n', main_content)
+
+    logging.info(f"CONG TEST len(main_content): {len(main_content)}")
+    return main_content

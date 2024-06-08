@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import re
 from langdetect import detect
 
 def md5(file_path):
@@ -8,6 +9,19 @@ def md5(file_path):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
+
+def get_arxiv_id(url):
+    # Regular expression to match the pattern "digits.digits"
+    pattern = r'\d+\.\d+'
+    
+    # Search for the pattern in the URL
+    match = re.search(pattern, url)
+    
+    # Return the matched substring if found, else return None
+    if match:
+        return match.group(0)
+    else:
+        return None
 
 def get_youtube_video_id(url):
     if url is None:
