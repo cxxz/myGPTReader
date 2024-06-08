@@ -12,7 +12,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_bolt.error import BoltUnhandledRequestError
 import concurrent.futures
 from app.daily_hot_news import build_all_news_block
-from app.gpt import get_answer_from_chatGPT, get_answer_from_llama_file, get_docs_from_web, get_text_from_whisper, get_voice_file_from_text, index_cache_file_dir
+from app.gpt import get_answer_from_chatGPT, get_content_from_media, get_docs_from_web, get_text_from_whisper, get_voice_file_from_text, index_cache_file_dir, transcribe_audio
 from llama_index.core import Document
 from app.rate_limiter import RateLimiter
 from app.user import get_user, is_premium_user, is_active_user, update_message_token_usage
@@ -199,18 +199,18 @@ def bot_process(event, say, logger):
             if not file_md5_name.exists():
                 logger.info(f'=====> Rename file to {file_md5_name}')
                 temp_file_filename.rename(file_md5_name)
-                if filetype in filetype_voice_extension_allowed:
-                    voicemessage = get_text_from_whisper(file_md5_name)
+                # if filetype in filetype_voice_extension_allowed:
+                #     voicemessage = get_text_from_whisper(file_md5_name)
 
     parent_thread_ts = event["thread_ts"] if "thread_ts" in event else thread_ts
     if parent_thread_ts not in thread_message_history:
         thread_message_history[parent_thread_ts] = { 'dialog_texts': [], 'context_urls': set(), 'file': None}
 
-    if "text" in event or voicemessage:
+    if "text" in event:
         urls = extract_urls_from_event(event)
         logger.info(f'=====> Extracted urls from event: {urls}')
         try:
-            dialog = remove_url_from_text(format_dialog_text(event["text"], voicemessage), urls)
+            dialog = format_dialog_text(event["text"], voicemessage)
             logger.info(f'=====> Formatted dialog: {dialog}')
             update_thread_history(parent_thread_ts, f'User: {dialog}', urls)
         except Exception as e:
@@ -219,8 +219,7 @@ def bot_process(event, say, logger):
             return
 
     if file_md5_name is not None:
-        if not voicemessage:
-            update_thread_history(parent_thread_ts, None, None, file_md5_name)
+        update_thread_history(parent_thread_ts, None, None, file_md5_name)
     
     urls = thread_message_history[parent_thread_ts]['context_urls']
     file = thread_message_history[parent_thread_ts]['file']
@@ -231,7 +230,7 @@ def bot_process(event, say, logger):
     # TODO: https://github.com/jerryjliu/llama_index/issues/778
     # if it can get the context_str, then put this prompt into the thread_message_history to provide more context to the chatGPT
     if file is not None:
-        future = executor.submit(get_answer_from_llama_file, dialog_context_keep_latest(thread_message_history[parent_thread_ts]['dialog_texts']), file)
+        future = executor.submit(get_content_from_media, dialog_context_keep_latest(thread_message_history[parent_thread_ts]['dialog_texts']), file)
     elif len(urls) > 0:
         future = executor.submit(get_docs_from_web, thread_message_history[parent_thread_ts]['dialog_texts'], list(urls))
     else:
@@ -242,12 +241,12 @@ def bot_process(event, say, logger):
         if isinstance(response, dict):
             logger.info(response)
             file_count = 0
-            for url, doc in response.items():
+            for key, doc in response.items():
                 if os.path.exists(doc):
                     slack_app.client.files_upload_v2(file=doc, channel=channel, thread_ts=parent_thread_ts)
                     file_count += 1
                 else:
-                    say(f'<@{user}>, missing file {doc} for {url}', thread_ts=thread_ts)
+                    say(f'<@{user}>, missing file {doc} for {key}', thread_ts=thread_ts)
             response = f'Response written to {file_count} files'
         update_thread_history(parent_thread_ts, 'chatGPT: %s' % insert_space(f'{response}'))
         logger.info(response)
@@ -288,94 +287,94 @@ def log_message(logger, event, say):
     except Exception as e:
         logger.error(f"Error responding to direct message: {e}")
 
-@slack_app.event(event="team_join")
-def send_welcome_message(logger, event):
-    try:
-        logger.info(f"Welcome new user: {event}")
-        user_id = event["user"]["id"]
-        user_info = get_user(user_id)
-        welcome_message_block = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"Hi <@{user_id}>, welcome to myreader.io, a community-driven way to read and chat with AI bots! In this community, you can read articles and documents with the AI bots, and chat with the AI bots to get answers to your questions. You can also share what you read with the community and learn how to communicate with the AI bots using the best `prompt`."
-                }
-            },
-            {
-                "type": "divider"
-            },
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "How to use myreader.io"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "0. Go to the channel #general to know the latest news about the product.\n 1. Go to the channel #temp and mention the bot with the command `@my-gpt-reader-bot` to get started.\n 2. You can post a link to an article or document with your question, and the bot will give your answer based the article or document.\n 3. You can also talk to the bot with any question, and the bot will give your answer based on the context of the conversation.\n 4. You can talk to the bot via voice message, and the bot also will respond with a voice message. We think it is a good way to practice your second language."
-                }
-            },
-            {
-                "type": "divider"
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Free plan limitation* \n 1. Free users can only talk to the bot in the public channel. If you want to a private conversation with the bot, please subscribe to our Premium plan to support our service.\n 2. There is a rate limit of {limiter_message_per_user} messages per {limiter_time_period / 3600} hour. If you want to send more messages, please subscribe to our Premium plan to support our service."
-                }
-            },
-            {
-                "type": "divider"
-            },
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "How to subscribe to our Premium plan"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "Click the `Subscribe Now` to subscribe to our Premium plan."
-                },
-                "accessory": {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": "Subscribe Now"
-                    },
-                    "url": f"{user_info['payment_link']}"
-                }
-            },
-            {
-                "type": "divider"
-            },
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Support our service"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "You can support our service by giving us a upvote on Product Hunt: https://www.producthunt.com/posts/mygptreader"
-                }
-            }
-        ]
-        r = slack_app.client.chat_postMessage(text='Welcome to myreader.io!', blocks=welcome_message_block, channel=user_id)
-        logger.info(r)
-    except Exception as e:
-        logger.error(f"Error sending welcome message: {e}")
+# @slack_app.event(event="team_join")
+# def send_welcome_message(logger, event):
+#     try:
+#         logger.info(f"Welcome new user: {event}")
+#         user_id = event["user"]["id"]
+#         user_info = get_user(user_id)
+#         welcome_message_block = [
+#             {
+#                 "type": "section",
+#                 "text": {
+#                     "type": "mrkdwn",
+#                     "text": f"Hi <@{user_id}>, welcome to myreader.io, a community-driven way to read and chat with AI bots! In this community, you can read articles and documents with the AI bots, and chat with the AI bots to get answers to your questions. You can also share what you read with the community and learn how to communicate with the AI bots using the best `prompt`."
+#                 }
+#             },
+#             {
+#                 "type": "divider"
+#             },
+#             {
+#                 "type": "header",
+#                 "text": {
+#                     "type": "plain_text",
+#                     "text": "How to use myreader.io"
+#                 }
+#             },
+#             {
+#                 "type": "section",
+#                 "text": {
+#                     "type": "mrkdwn",
+#                     "text": "0. Go to the channel #general to know the latest news about the product.\n 1. Go to the channel #temp and mention the bot with the command `@my-gpt-reader-bot` to get started.\n 2. You can post a link to an article or document with your question, and the bot will give your answer based the article or document.\n 3. You can also talk to the bot with any question, and the bot will give your answer based on the context of the conversation.\n 4. You can talk to the bot via voice message, and the bot also will respond with a voice message. We think it is a good way to practice your second language."
+#                 }
+#             },
+#             {
+#                 "type": "divider"
+#             },
+#             {
+#                 "type": "section",
+#                 "text": {
+#                     "type": "mrkdwn",
+#                     "text": f"*Free plan limitation* \n 1. Free users can only talk to the bot in the public channel. If you want to a private conversation with the bot, please subscribe to our Premium plan to support our service.\n 2. There is a rate limit of {limiter_message_per_user} messages per {limiter_time_period / 3600} hour. If you want to send more messages, please subscribe to our Premium plan to support our service."
+#                 }
+#             },
+#             {
+#                 "type": "divider"
+#             },
+#             {
+#                 "type": "header",
+#                 "text": {
+#                     "type": "plain_text",
+#                     "text": "How to subscribe to our Premium plan"
+#                 }
+#             },
+#             {
+#                 "type": "section",
+#                 "text": {
+#                     "type": "mrkdwn",
+#                     "text": "Click the `Subscribe Now` to subscribe to our Premium plan."
+#                 },
+#                 "accessory": {
+#                     "type": "button",
+#                     "text": {
+#                         "type": "plain_text",
+#                         "text": "Subscribe Now"
+#                     },
+#                     "url": f"{user_info['payment_link']}"
+#                 }
+#             },
+#             {
+#                 "type": "divider"
+#             },
+#             {
+#                 "type": "header",
+#                 "text": {
+#                     "type": "plain_text",
+#                     "text": "Support our service"
+#                 }
+#             },
+#             {
+#                 "type": "section",
+#                 "text": {
+#                     "type": "mrkdwn",
+#                     "text": "You can support our service by giving us a upvote on Product Hunt: https://www.producthunt.com/posts/mygptreader"
+#                 }
+#             }
+#         ]
+#         r = slack_app.client.chat_postMessage(text='Welcome to myreader.io!', blocks=welcome_message_block, channel=user_id)
+#         logger.info(r)
+#     except Exception as e:
+#         logger.error(f"Error sending welcome message: {e}")
 
 # @slack_app.event("app_home_opened")
 # def update_home_tab(client, event, logger):

@@ -139,7 +139,16 @@ def get_official_transcript_from_youtube(video_id):
 def remove_prompt_from_text(text):
     return text.replace('chatGPT:', '').strip()
 
-def get_file_from_url(url, prefix = "page", format = ".txt"):
+def get_filename_from_media(index_name, prefix = "audio", format = ".txt"):
+    md5_index = index_name
+    # md5_index = hashlib.md5(index_name).hexdigest()
+    file_name = f"{index_cache_file_dir}/{prefix}_{md5_index}{format}"
+    if os.path.exists(file_name):
+        logging.info(f"CONG TEST {file_name} exists for {md5_index}")
+        return True, file_name
+    return False, file_name
+
+def get_filename_from_url(url, prefix = "page", format = ".txt"):
     if prefix == "youtube":
         video_id = get_youtube_video_id(url)
         md5_url = video_id
@@ -158,8 +167,8 @@ def get_file_from_url(url, prefix = "page", format = ".txt"):
         return True, file_name
     return False, file_name
     
-def write_url_doc(text, file_name):
-    logging.info(f"CONG TEST write_url_doc: {file_name}")
+def write_text_to_file(text, file_name):
+    logging.info(f"CONG TEST write_text_to_file: {file_name}")
     with open(file_name, "w") as f:
         f.write(text)
     return file_name
@@ -169,32 +178,32 @@ def get_documents_from_urls(urls, format = ".txt"):
     docs = {}
     if len(urls['page_urls']) > 0:
         for url in urls['page_urls']:
-            file_exist, file_name = get_file_from_url(url, "page", format)
-            docs[url] = file_name if file_exist else write_url_doc(get_webpage_md_by_jina(url), file_name)
+            file_exist, file_name = get_filename_from_url(url, "page", format)
+            docs[url] = file_name if file_exist else write_text_to_file(get_webpage_md_by_jina(url), file_name)
     if len(urls['arxiv_urls']) > 0:
         for url in urls['arxiv_urls']:
-            file_exist, file_name = get_file_from_url(url, "arxiv", format)
+            file_exist, file_name = get_filename_from_url(url, "arxiv", format)
             axiv_id = get_arxiv_id(url)
-            docs[url] = file_name if file_exist else write_url_doc(get_arxiv_tex(axiv_id), file_name)
+            docs[url] = file_name if file_exist else write_text_to_file(get_arxiv_tex(axiv_id), file_name)
     if len(urls['rss_urls']) > 0:
         rss_documents = RssReader().load_data(urls['rss_urls'])
         for i, url in enumerate(urls['rss_urls']):
-            file_exist, file_name = get_file_from_url(url, "rss", format)
-            docs[url] = file_name if file_exist else write_url_doc(rss_documents[i], file_name)
+            file_exist, file_name = get_filename_from_url(url, "rss", format)
+            docs[url] = file_name if file_exist else write_text_to_file(rss_documents[i], file_name)
     if len(urls['phantomjscloud_urls']) > 0:
         for url in urls['phantomjscloud_urls']:
-            file_exist, file_name = get_file_from_url(url, "phantomjscloud", format)
-            docs[url] = file_name if file_exist else write_url_doc(scrape_website_by_phantomjscloud(url), file_name)
+            file_exist, file_name = get_filename_from_url(url, "phantomjscloud", format)
+            docs[url] = file_name if file_exist else write_text_to_file(scrape_website_by_phantomjscloud(url), file_name)
     if len(urls['youtube_urls']) > 0:
         for url in urls['youtube_urls']:
             video_id = get_youtube_video_id(url)
             # print(f"CONG TEST video_id: {video_id}")
-            file_exist, file_name = get_file_from_url(url, "youtube", format)
+            file_exist, file_name = get_filename_from_url(url, "youtube", format)
             if file_exist:
                 logging.info(f"CONG TEST {file_name} already exists!")
                 docs[url] = file_name 
             elif format == ".txt":
-                docs[url] = write_url_doc(get_official_transcript_from_youtube(video_id), file_name)
+                docs[url] = write_text_to_file(get_official_transcript_from_youtube(video_id), file_name)
             elif format == ".m4a" or format == ".mp3":
                 docs[url] = download_audio_from_youtube(url, file_name)
             elif format == ".srt" or format == ".vtt":
@@ -291,6 +300,36 @@ def get_answer_from_llama_web(messages, urls):
     total_llm_model_tokens = llm_predictor.last_token_usage
     total_embedding_model_tokens = service_context.embed_model.last_token_usage
     return answer, total_llm_model_tokens, total_embedding_model_tokens
+
+def get_content_from_media(messages, media_file):
+    # logging.info(f"CONG TEST getting content {media_file}")
+    dialog_messages = format_dialog_messages(messages)
+    latest_msg = messages[-1]
+    # logging.info(f"CONG TEST latest_msg {latest_msg}")
+    index_name = get_index_name_from_file(media_file)
+    # logging.info(f"CONG TEST index_name {index_name}")
+    file_exist, file_name = get_filename_from_media(index_name)
+    # logging.info(f"CONG TEST file_name {file_name}")
+
+    content = {}
+    media_file_str = str(media_file)
+    # logging.info(f"CONG TEST Getting content from {media_file_str}")
+
+    if file_exist:
+        content[media_file_str] = file_name
+        return content, 0, 0
+    
+    if media_file_str.endswith(".m4a") or media_file_str.endswith(".mp3"):
+        format = "vtt" if ".vtt" in latest_msg else "srt"
+        logging.info(f"Transcribing {media_file_str} to {format}")
+        content_file = transcribe_audio(media_file_str, format)
+    else:
+        msg = f"Uploaded file: {media_file_str}\nindex name: {index_name}\nNot written to:{file_name}"
+        content_file = write_text_to_file(msg, file_name)
+        logging.info.info(msg)
+
+    content[media_file_str] = content_file
+    return content, 0, 0
 
 def get_answer_from_llama_file(messages, file):
     dialog_messages = format_dialog_messages(messages)
