@@ -14,7 +14,7 @@ from llama_index.core import ServiceContext, GPTVectorStoreIndex, SimpleDirector
 from llama_index.legacy.llm_predictor.base import LLMPredictor
 from llama_index.readers.web import RssReader
 # from llama_index.readers.schema.base import Document
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from azure.cognitiveservices.speech import SpeechConfig, SpeechSynthesizer, ResultReason, CancellationReason, SpeechSynthesisOutputFormat
 from azure.cognitiveservices.speech.audio import AudioOutputConfig
 
@@ -25,6 +25,13 @@ from app.util import get_language_code, get_youtube_video_id, get_arxiv_id
 import whisperx
 from whisperx.utils import get_writer
 
+from pdftext.extraction import plain_text_output
+
+from marker.convert import convert_single_pdf
+from marker.output import markdown_exists, save_markdown
+from marker.models import load_all_models
+import traceback
+    
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -73,6 +80,35 @@ llm_predictor = LLMPredictor(llm=ChatOpenAI(
 service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
 web_storage_context = StorageContext.from_defaults()
 file_storage_context = StorageContext.from_defaults()
+
+all_marker_models = load_all_models()
+
+def marker_pdf_to_md(pdf_file, output_filepath):
+    md_file = output_filepath.split("/")[-1]
+    out_folder = output_filepath.replace(md_file, "")
+
+    if markdown_exists(out_folder, md_file):
+        return None
+
+    try:
+        # Skip trying to convert files that don't have a lot of embedded text
+        # This can indicate that they were scanned, and not OCRed properly
+        # Usually these files are not recent/high-quality
+
+        full_text, images, out_metadata = convert_single_pdf(pdf_file, all_marker_models)
+        if len(full_text.strip()) > 0:
+            sub_folder = save_markdown(out_folder, md_file, full_text, images, out_metadata)
+            return f"{sub_folder}/{md_file}"
+        else:
+            print(f"Empty file: {pdf_file}.  Could not convert.")
+            return None
+    except Exception as e:
+        print(f"Error converting {pdf_file}: {e}")
+        print(traceback.format_exc())
+        return None
+
+def get_content_PDFText(pdf_file):
+    return plain_text_output(pdf_file, workers=8)
 
 def transcribe_audio(audio_file, format):
     filename = audio_file.split("/")[-1].replace(".mp3","").replace(".m4a","")
@@ -139,7 +175,7 @@ def get_official_transcript_from_youtube(video_id):
 def remove_prompt_from_text(text):
     return text.replace('chatGPT:', '').strip()
 
-def get_filename_from_media(index_name, prefix = "audio", format = ".txt"):
+def get_filename_from_media(index_name, prefix = "media", format = ".txt"):
     md5_index = index_name
     # md5_index = hashlib.md5(index_name).hexdigest()
     file_name = f"{index_cache_file_dir}/{prefix}_{md5_index}{format}"
@@ -305,30 +341,49 @@ def get_content_from_media(messages, media_file):
     # logging.info(f"CONG TEST getting content {media_file}")
     dialog_messages = format_dialog_messages(messages)
     latest_msg = messages[-1]
+
+    prefix = None
+    format = None
+    media_file_str = str(media_file)
+
+    if media_file_str.endswith(".m4a") or media_file_str.endswith(".mp3"):
+        prefix = "audio"
+        format = ".vtt" if ".vtt" in latest_msg else ".srt"
+    elif media_file_str.endswith(".pdf"):
+        prefix = "pdf"
+        format = ".md" if ".md" in latest_msg else ".txt"
+
     # logging.info(f"CONG TEST latest_msg {latest_msg}")
     index_name = get_index_name_from_file(media_file)
     # logging.info(f"CONG TEST index_name {index_name}")
-    file_exist, file_name = get_filename_from_media(index_name)
+    file_exist, file_name = get_filename_from_media(index_name, prefix, format)
     # logging.info(f"CONG TEST file_name {file_name}")
 
     content = {}
-    media_file_str = str(media_file)
+    content_file = None
     # logging.info(f"CONG TEST Getting content from {media_file_str}")
 
     if file_exist:
         content[media_file_str] = file_name
         return content, 0, 0
     
-    if media_file_str.endswith(".m4a") or media_file_str.endswith(".mp3"):
-        format = "vtt" if ".vtt" in latest_msg else "srt"
+    if prefix == "audio":
         logging.info(f"Transcribing {media_file_str} to {format}")
         content_file = transcribe_audio(media_file_str, format)
+    elif prefix == "pdf":
+        logging.info(f"Extracting pdf text from {media_file_str} to {format}")
+        if format == ".md":
+            content_file = marker_pdf_to_md(media_file_str, file_name)
+        else:
+            pdf_text = get_content_PDFText(media_file_str)
+            content_file = write_text_to_file(pdf_text, file_name)
     else:
         msg = f"Uploaded file: {media_file_str}\nindex name: {index_name}\nNot written to:{file_name}"
         content_file = write_text_to_file(msg, file_name)
         logging.info.info(msg)
 
-    content[media_file_str] = content_file
+    if content_file is not None:
+        content[media_file_str] = content_file
     return content, 0, 0
 
 def get_answer_from_llama_file(messages, file):
