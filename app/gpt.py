@@ -88,7 +88,7 @@ def marker_pdf_to_md(pdf_file, output_filepath):
     out_folder = output_filepath.replace(md_file, "")
 
     if markdown_exists(out_folder, md_file):
-        return None
+        return output_filepath.replace(".md","/") + md_file
 
     try:
         # Skip trying to convert files that don't have a lot of embedded text
@@ -374,6 +374,7 @@ def get_content_from_media(messages, media_file):
         logging.info(f"Extracting pdf text from {media_file_str} to {format}")
         if format == ".md":
             content_file = marker_pdf_to_md(media_file_str, file_name)
+            logging.info(f"CONG TEST file written to {content_file}")
         else:
             pdf_text = get_content_PDFText(media_file_str)
             content_file = write_text_to_file(pdf_text, file_name)
