@@ -149,6 +149,12 @@ def transcribe_audio(audio_file, format):
         text_file = f"{transcribed_cache_file_dir}/{filename}.vtt"
         logging.info(f"srt file written to {text_file}")
         return text_file
+    elif output_format == "json":
+        writer = get_writer("json", transcribed_cache_file_dir)
+        writer(result, f"{filename}", None)
+        text_file = f"{transcribed_cache_file_dir}/{filename}.json"
+        logging.info(f"json file written to {text_file}")
+        return text_file    
     else:
         logging.error(f"{output_format} not supported")
         return None
@@ -242,7 +248,7 @@ def get_documents_from_urls(urls, format = ".txt"):
                 docs[url] = write_text_to_file(get_official_transcript_from_youtube(video_id), file_name)
             elif format == ".m4a" or format == ".mp3":
                 docs[url] = download_audio_from_youtube(url, file_name)
-            elif format == ".srt" or format == ".vtt":
+            elif format == ".srt" or format == ".vtt" or format == ".json":
                 audio_file = file_name.replace(format, ".m4a")
                 if not os.path.exists(audio_file):
                     logging.info(f"CONG TEST downloading {url} audio to {audio_file}")
@@ -303,6 +309,8 @@ def get_docs_from_web(messages, urls):
         format = ".srt"
     elif '.vtt' in latest_msg:
         format = ".vtt"
+    elif '.json' in latest_msg:
+        format = ".json"
     combained_urls = get_urls(urls)
     logging.info(combained_urls)
     documents = get_documents_from_urls(combained_urls, format = format)
@@ -348,7 +356,7 @@ def get_content_from_media(messages, media_file):
 
     if media_file_str.endswith(".m4a") or media_file_str.endswith(".mp3"):
         prefix = "audio"
-        format = ".vtt" if ".vtt" in latest_msg else ".srt"
+        format = ".vtt" if ".vtt" in latest_msg else ".json" if ".json" in latest_msg else ".srt"
     elif media_file_str.endswith(".pdf"):
         prefix = "pdf"
         format = ".md" if ".md" in latest_msg else ".txt"
@@ -511,7 +519,7 @@ def get_arxiv_tex(arxiv_id):
     # iterate over tex_content and find the file that contains the abstract
     main_tex = None
     for file, content in tex_content.items():
-        if "begin{abstract}" in content and "begin{document}" in content:
+        if "begin{document}" in content and ("begin{abstract}" in content or "\\input" in content):
             print(f"Found main tex: {file}")
             main_tex = file
             break
