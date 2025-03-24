@@ -110,13 +110,21 @@ def marker_pdf_to_md(pdf_file, output_filepath):
 def get_content_PDFText(pdf_file):
     return plain_text_output(pdf_file, workers=8)
 
-def transcribe_audio(audio_file, format):
+def transcribe_audio(audio_file, format, domain_terms=None):
+    print(f"CONG TEST Transcribing with domain_terms: {domain_terms}")
     filename = audio_file.split("/")[-1].replace(".mp3","").replace(".m4a","")
     output_format = format.replace(".","")
 
     logging.info(f"Loading {audio_file}")
     audio = whisperx.load_audio(audio_file)
     logging.info(f"Start transcribing with batch size {whisperx_bs}")
+    if domain_terms:
+        init_prompt = f"Terms and abbreviations used in this transcription include: {domain_terms}"
+        logging.info(f"Initial prompt for transcription:\n{init_prompt}")
+        whisper_model = whisperx.load_model("/local/openai/faster-whisper-large-v3",
+                                            whisperx_device,
+                                            asr_options={"initial_prompt": init_prompt})
+    
     result = whisper_model.transcribe(audio, batch_size=whisperx_bs)
     lang = result['language']
     logging.info(f"Transcription complete. Language detected: {lang}")
@@ -215,7 +223,7 @@ def write_text_to_file(text, file_name):
         f.write(text)
     return file_name
 
-def get_documents_from_urls(urls, format = ".txt"):
+def get_documents_from_urls(urls, format = ".txt", message = None):
     logging.info(f"CONG TEST getting {format} documents from urls: {urls}")
     docs = {}
     if len(urls['page_urls']) > 0:
@@ -253,7 +261,12 @@ def get_documents_from_urls(urls, format = ".txt"):
                 if not os.path.exists(audio_file):
                     logging.info(f"CONG TEST downloading {url} audio to {audio_file}")
                     audio_file = download_audio_from_youtube(url, audio_file)
-                file_name = transcribe_audio(audio_file, format)
+                logging.info(f"CONG TEST message: {message}")
+                if "+voc:" in message:
+                    domain_terms = message.split("+voc:")[1].strip()
+                else:
+                    domain_terms = None
+                file_name = transcribe_audio(audio_file, format, domain_terms)
                 if file_name:
                     docs[url] = file_name
 
@@ -313,7 +326,7 @@ def get_docs_from_web(messages, urls):
         format = ".json"
     combained_urls = get_urls(urls)
     logging.info(combained_urls)
-    documents = get_documents_from_urls(combained_urls, format = format)
+    documents = get_documents_from_urls(combained_urls, format, latest_msg)
     logging.info(documents)
     return documents, 0, 0
 
@@ -377,7 +390,12 @@ def get_content_from_media(messages, media_file):
     
     if prefix == "audio":
         logging.info(f"Transcribing {media_file_str} to {format}")
-        content_file = transcribe_audio(media_file_str, format)
+        if "+voc:" in latest_msg:
+            domain_terms = latest_msg.split("+voc:")[1].strip()
+            logging.info(f"CONG TEST domain_terms: {domain_terms}")
+            content_file = transcribe_audio(media_file_str, format, domain_terms)
+        else:
+            content_file = transcribe_audio(media_file_str, format)
     elif prefix == "pdf":
         logging.info(f"Extracting pdf text from {media_file_str} to {format}")
         if format == ".md":
