@@ -70,7 +70,7 @@ whisperx_device = "cuda"
 whisperx_bs = 32
 whisperx_args = {"max_line_width":None, "max_line_count":None, "highlight_words":False}
 
-whisper_model = whisperx.load_model("/local/openai/faster-whisper-large-v3", whisperx_device)
+DEFAULT_WHISPER = whisperx.load_model("/local/openai/faster-whisper-large-v3", whisperx_device)
 
 client = OpenAI()
 
@@ -124,6 +124,8 @@ def transcribe_audio(audio_file, format, domain_terms=None):
         whisper_model = whisperx.load_model("/local/openai/faster-whisper-large-v3",
                                             whisperx_device,
                                             asr_options={"initial_prompt": init_prompt})
+    else:
+        whisper_model = DEFAULT_WHISPER
     
     result = whisper_model.transcribe(audio, batch_size=whisperx_bs)
     lang = result['language']
